@@ -1,0 +1,53 @@
+BreakoutV4
+Detailed Requirements Prompt (Master List)
+
+Game Environment & UI:
+•	Use a single file HTML solution with an 800×600 HTML5 canvas as the game area (internal resolution).
+•	The canvas scales responsively on mobile devices.
+•	All UI is drawn on the canvas, including:
+o	“Player 1 Score” displayed in the top left.
+o	Remaining lives shown as small ball icons in the top right.
+o	Current level displayed (e.g., at the top center).
+•	Include HTML buttons (Restart, Pause) below the canvas.
+Paddle & Ball Mechanics:
+•	The paddle is controlled by mouse movement on desktop and touch (drag) on mobile.
+•	On mobile, the paddle’s dimensions (width/height) are increased for easier touch handling.
+•	The paddle’s appearance changes (e.g., turns orange) when in “fire mode” (after collecting a fire capsule).
+•	The paddle fires projectiles (using Control or Space on desktop, tap on mobile) with a 500 ms cooldown.
+•	The ball is initially launched just above the paddle with an Atari style angled bounce based on where it strikes the paddle.
+•	Collisions are computed using the ball’s bounding box and detecting which side of a rectangle (paddle, brick, wall, alien) is touched.
+•	When the ball hits a brick in a new row, its speed increases by 0.05 (up to a maximum multiplier of 2).
+•	The ball’s base speed is reduced on mobile to ensure a playable pace.
+Brick Grid & Capsules:
+•	A grid of 15 columns by 5 rows of bricks is displayed, with a 1 pixel gap between bricks.
+•	There are 5 blank rows above the brick grid for the alien’s path.
+•	Brick colors and point values (from top to bottom): red (50), purple (40), blue (30), yellow (20), green (10).
+•	Two bricks are randomly chosen to contain a fire capsule. When hit, these drop a red capsule; if the paddle collects it, “fire mode” is activated.
+Projectiles (Bullets):
+•	When the paddle is in fire mode, it fires small yellow projectiles from its center top.
+•	Projectiles destroy bricks (award points and play sound effects) and can also destroy the alien.
+Lives & Scoring:
+•	The player starts with 10 lives.
+•	Each time the ball falls below the paddle, the player loses a life and a new ball is spawned.
+•	Points are earned by breaking bricks and other special events (such as hitting the alien).
+Sound Effects:
+•	Use the Web Audio API with an 8 bit style square wave oscillator to produce sound effects for various events (ball bounce, brick break, capsule collection, projectile firing, level up, etc.).
+•	Due to browser restrictions, the audio context is unlocked on the first user interaction (touch or click).
+•	A “Ready!” start sound is played (with the ball remaining stationary and a “Ready!” message displayed) each time the ball is launched.
+Alien Spaceship (Enhanced Feature):
+•	An alien spaceship spawns every 20 seconds (if none is active) and appears in the second blank row.
+•	The alien is drawn as a flying saucer with a silver elliptical base, a lightgray dome, and two blinking red lights.
+•	Instead of a continuous low hum, the alien now plays a higher pitched, short three beep sequence (repeated twice during its traverse).
+•	When the alien reaches mid screen, it drops a replacement brick that restores one previously destroyed brick.
+•	Hitting the alien with the ball or a projectile awards 100 points and destroys the alien.
+Level Management:
+•	The game consists of 3 levels.
+•	When all bricks (and falling replacement bricks) are cleared, a three note “level up” sound is played before advancing to the next level.
+•	After the 3rd level, a “You win!” message is displayed before restarting the game.
+Responsive Design & Mobile-Specific Fixes:
+•	The game supports both desktop and mobile (touch) controls.
+•	On mobile, touch events (touchstart, touchmove, touchend) are handled so that the paddle remains in its last dragged position, and the entire play area is available for dragging (with correct coordinate scaling).
+•	The ball’s speed and paddle dimensions are adjusted on mobile for improved playability.
+•	Header text is larger on mobile for accessibility.
+
+

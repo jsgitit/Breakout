@@ -1,0 +1,815 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <!-- Ensure proper scaling on mobile devices -->
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Advanced Atari Breakout with Alien – Mobile & Accessibility Fixes</title>
+  <style>
+    body {
+      margin: 0;
+      background-color: black;
+      color: white;
+      font-family: Arial, sans-serif;
+      text-align: center;
+    }
+    canvas {
+      background-color: #000;
+      display: block;
+      margin: 0 auto;
+      border: 1px solid #fff;
+      /* Scale the canvas for mobile */
+      max-width: 100%;
+      height: auto;
+    }
+    #controls {
+      margin: 10px;
+    }
+    button {
+      padding: 10px 20px;
+      font-size: 16px;
+      margin: 5px;
+    }
+  </style>
+</head>
+<body>
+  <!-- The game uses an 800×600 canvas (internal resolution) -->
+  <canvas id="gameCanvas" width="800" height="600"></canvas>
+  <div id="controls">
+    <button id="restartButton">Restart</button>
+    <button id="pauseButton">Pause</button>
+  </div>
+
+  <script>
+    /***********************
+     * SOUND MANAGER CLASS *
+     ***********************/
+    class SoundManager {
+      constructor() {
+        this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      // Play an 8‑bit style square‐wave tone.
+      playTone(freq, duration = 0.1, volume = 0.5) {
+        const osc = this.audioCtx.createOscillator();
+        const gain = this.audioCtx.createGain();
+        osc.type = "square";
+        osc.frequency.value = freq;
+        gain.gain.value = volume;
+        osc.connect(gain);
+        gain.connect(this.audioCtx.destination);
+        osc.start();
+        osc.stop(this.audioCtx.currentTime + duration);
+      }
+      stopSound(soundObj) {
+        if (soundObj && soundObj.oscillator) {
+          soundObj.oscillator.stop();
+        }
+      }
+    }
+
+    /*****************
+     * GAME CLASS    *
+     *****************/
+    class Game {
+      constructor(canvas) {
+        this.canvas = canvas;
+        this.ctx = canvas.getContext("2d");
+        this.width = canvas.width;
+        this.height = canvas.height;
+        this.score = 0;
+        this.lives = 10;
+        this.level = 1;
+        this.maxLevels = 3;
+        this.isPaused = false;
+        this.lastTime = 0;
+        this.soundManager = new SoundManager();
+        this.levelComplete = false;
+        // Detect mobile devices.
+        this.isMobile = /Mobi|Android/i.test(navigator.userAgent);
+
+        // Game objects.
+        this.paddle = new Paddle(this);
+        this.ball = new Ball(this);
+        this.bricks = [];
+        this.destroyedBricks = [];
+        this.capsules = [];
+        this.projectiles = [];
+        this.alien = null;
+        this.replacementBricks = [];
+
+        // Timer for alien spawning (every 20 seconds).
+        this.alienTimer = 0;
+
+        this.createBricks();
+      }
+
+      createBricks() {
+        const rows = 5;
+        const cols = 15;
+        const gap = 1;
+        const blankRows = 5; // Blank rows above bricks (for the alien’s path).
+        const brickHeight = 20;
+        const brickWidth = (this.width - (cols - 1) * gap) / cols;
+        const colors = ["red", "purple", "blue", "yellow", "green"];
+        const points = [50, 40, 30, 20, 10];
+        this.bricks = [];
+        for (let row = 0; row < rows; row++) {
+          for (let col = 0; col < cols; col++) {
+            const x = col * (brickWidth + gap);
+            const y = (blankRows * brickHeight) + row * (brickHeight + gap);
+            const brick = new Brick(x, y, brickWidth, brickHeight, colors[row], points[row], row);
+            this.bricks.push(brick);
+          }
+        }
+        // Randomly mark two bricks to contain fire capsules.
+        let indices = [];
+        while (indices.length < 2) {
+          let idx = Math.floor(Math.random() * this.bricks.length);
+          if (!indices.includes(idx)) {
+            indices.push(idx);
+            this.bricks[idx].hasCapsule = true;
+          }
+        }
+      }
+
+      update(deltaTime) {
+        if (this.isPaused) return;
+        this.paddle.update(deltaTime);
+        this.ball.update(deltaTime);
+        this.capsules.forEach(c => c.update(deltaTime));
+        this.projectiles.forEach(p => p.update(deltaTime));
+        if (this.alien) this.alien.update(deltaTime);
+        this.replacementBricks.forEach(rb => rb.update(deltaTime));
+
+        // Remove objects flagged for removal.
+        this.capsules = this.capsules.filter(c => !c.toRemove);
+        this.projectiles = this.projectiles.filter(p => !p.toRemove);
+        this.replacementBricks = this.replacementBricks.filter(rb => !rb.toRemove);
+
+        // Spawn the alien every 20 seconds (if none is active).
+        this.alienTimer += deltaTime;
+        if (!this.alien && this.alienTimer >= 20000) {
+          this.spawnAlien();
+          this.alienTimer = 0;
+        }
+
+        // Level complete when all bricks and replacement bricks are cleared.
+        if (!this.levelComplete && this.bricks.every(brick => brick.destroyed) && this.replacementBricks.length === 0) {
+          this.levelComplete = true;
+          this.playLevelUpSound();
+          setTimeout(() => {
+            this.levelUp();
+            this.levelComplete = false;
+          }, 1000);
+        }
+      }
+
+      spawnAlien() {
+        this.alien = new Alien(this);
+      }
+
+      render() {
+        const ctx = this.ctx;
+        ctx.clearRect(0, 0, this.width, this.height);
+        ctx.fillStyle = "black";
+        ctx.fillRect(0, 0, this.width, this.height);
+
+        // Draw UI.
+        ctx.fillStyle = "white";
+        // Use larger font on mobile.
+        ctx.font = this.isMobile ? "24px Arial" : "16px Arial";
+        ctx.textAlign = "left";
+        ctx.fillText(`Player 1 Score: ${this.score}`, 10, 30);
+        ctx.textAlign = "right";
+        let lifeIconRadius = 8;
+        for (let i = 0; i < this.lives; i++) {
+          ctx.beginPath();
+          ctx.arc(this.width - 10 - i * (lifeIconRadius * 2 + 5), 30, lifeIconRadius, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.textAlign = "center";
+        ctx.fillText(`Level: ${this.level}`, this.width / 2, 30);
+
+        // Draw game objects.
+        this.bricks.forEach(b => b.draw(ctx));
+        this.replacementBricks.forEach(rb => rb.draw(ctx));
+        this.capsules.forEach(c => c.draw(ctx));
+        this.paddle.draw(ctx);
+        this.ball.draw(ctx);
+        this.projectiles.forEach(p => p.draw(ctx));
+        if (this.alien) this.alien.draw(ctx);
+
+        // Draw a "Ready!" message if the ball is waiting.
+        if (this.ball.waiting) {
+          ctx.fillStyle = "yellow";
+          ctx.font = this.isMobile ? "36px Arial" : "28px Arial";
+          ctx.textAlign = "center";
+          ctx.fillText("Ready!", this.width / 2, this.height / 2);
+        }
+      }
+
+      // Collision detection: determine which side of a rectangle is hit by the ball's bounding box.
+      static ballRectSideCollision(ball, rect) {
+        const ballBox = {
+          left: ball.x - ball.radius,
+          right: ball.x + ball.radius,
+          top: ball.y - ball.radius,
+          bottom: ball.y + ball.radius
+        };
+        const rectBox = {
+          left: rect.x,
+          right: rect.x + rect.width,
+          top: rect.y,
+          bottom: rect.y + rect.height
+        };
+        if (ballBox.right < rectBox.left || ballBox.left > rectBox.right ||
+            ballBox.bottom < rectBox.top || ballBox.top > rectBox.bottom) {
+          return null;
+        }
+        const overlapLeft = ballBox.right - rectBox.left;
+        const overlapRight = rectBox.right - ballBox.left;
+        const overlapTop = ballBox.bottom - rectBox.top;
+        const overlapBottom = rectBox.bottom - ballBox.top;
+        const minOverlap = Math.min(overlapLeft, overlapRight, overlapTop, overlapBottom);
+        if (minOverlap === overlapLeft) return "left";
+        if (minOverlap === overlapRight) return "right";
+        if (minOverlap === overlapTop) return "top";
+        if (minOverlap === overlapBottom) return "bottom";
+        return null;
+      }
+
+      // Standard rectangle–rectangle collision.
+      static rectRectCollision(r1, r2) {
+        return !(
+          r2.x > r1.x + r1.width ||
+          r2.x + r2.width < r1.x ||
+          r2.y > r1.y + r1.height ||
+          r2.y + r2.height < r1.y
+        );
+      }
+
+      destroyBrick(brick) {
+        if (!brick.destroyed) {
+          brick.destroyed = true;
+          this.destroyedBricks.push(brick);
+          this.soundManager.playTone(600, 0.05);
+          this.score += brick.points;
+        }
+      }
+
+      restoreBrick(brick) {
+        brick.destroyed = false;
+        const index = this.destroyedBricks.indexOf(brick);
+        if (index !== -1) {
+          this.destroyedBricks.splice(index, 1);
+        }
+      }
+
+      restart() {
+        this.score = 0;
+        this.lives = 10;
+        this.level = 1;
+        this.ball.reset();
+        this.paddle.reset();
+        this.createBricks();
+        this.destroyedBricks = [];
+        this.capsules = [];
+        this.projectiles = [];
+        this.alien = null;
+        this.replacementBricks = [];
+        this.levelComplete = false;
+      }
+
+      levelUp() {
+        if (this.level < this.maxLevels) {
+          this.level++;
+          this.ball.reset();
+          this.paddle.reset();
+          this.createBricks();
+          this.destroyedBricks = [];
+          this.capsules = [];
+          this.projectiles = [];
+          this.replacementBricks = [];
+        } else {
+          this.displayWinMessage();
+          setTimeout(() => this.restart(), 3000);
+        }
+      }
+
+      playLevelUpSound() {
+        this.soundManager.playTone(700, 0.1);
+        setTimeout(() => this.soundManager.playTone(800, 0.1), 150);
+        setTimeout(() => this.soundManager.playTone(900, 0.1), 300);
+      }
+
+      displayWinMessage() {
+        const ctx = this.ctx;
+        ctx.fillStyle = "black";
+        ctx.fillRect(0, this.height / 2 - 30, this.width, 60);
+        ctx.fillStyle = "white";
+        ctx.font = "30px Arial";
+        ctx.textAlign = "center";
+        ctx.fillText("You win!", this.width / 2, this.height / 2 + 10);
+      }
+    }
+
+    /*****************
+     * PADDLE CLASS  *
+     *****************/
+    class Paddle {
+      constructor(game) {
+        this.game = game;
+        // Increase paddle dimensions on mobile.
+        if (this.game.isMobile) {
+          this.width = 140;
+          this.height = 25;
+        } else {
+          this.width = 100;
+          this.height = 20;
+        }
+        this.x = (game.width - this.width) / 2;
+        this.y = game.height - this.height - 10;
+        this.fireMode = false;
+        this.fireCooldown = 500; // milliseconds between shots.
+        this.lastFireTime = 0;
+        // For touch-drag on mobile.
+        this.dragOffset = 0;
+      }
+      update(deltaTime) {
+        // Paddle position is updated via mouse and touch events.
+      }
+      draw(ctx) {
+        ctx.fillStyle = this.fireMode ? "orange" : "white";
+        ctx.fillRect(this.x, this.y, this.width, this.height);
+      }
+      fireProjectile() {
+        const now = Date.now();
+        if (now - this.lastFireTime >= this.fireCooldown && this.fireMode) {
+          const projX = this.x + this.width / 2 - 3;
+          const projY = this.y - 10;
+          this.game.projectiles.push(new Projectile(this.game, projX, projY));
+          this.lastFireTime = now;
+          this.game.soundManager.playTone(800, 0.05);
+        }
+      }
+      reset() {
+        this.x = (this.game.width - this.width) / 2;
+        this.fireMode = false;
+      }
+    }
+
+    /*****************
+     * BALL CLASS    *
+     *****************/
+    class Ball {
+      constructor(game) {
+        this.game = game;
+        this.radius = 8;
+        this.reset();
+      }
+      reset() {
+        // Position the ball just above the paddle.
+        this.x = this.game.paddle.x + this.game.paddle.width / 2;
+        this.y = this.game.paddle.y - this.radius - 1;
+        // Use a slower base speed on mobile.
+        const isMobile = this.game.isMobile;
+        const baseSpeed = isMobile ? 4 : 5;
+        const angle = -Math.PI / 4;
+        const speed = baseSpeed * 1.5;
+        this.intendedDx = speed * Math.cos(angle);
+        this.intendedDy = speed * Math.sin(angle);
+        // Start with zero velocity and a waiting state.
+        this.dx = 0;
+        this.dy = 0;
+        this.waiting = true;
+        // Play a start sound and display "Ready!" each time the ball is launched.
+        this.game.soundManager.playTone(600, 0.1);
+        setTimeout(() => {
+          this.dx = this.intendedDx;
+          this.dy = this.intendedDy;
+          this.waiting = false;
+        }, 1000);
+        this.speedMultiplier = 1;
+        this.hitRows = new Set();
+      }
+      update(deltaTime) {
+        // Do not update position while waiting.
+        if (this.waiting) return;
+
+        this.x += this.dx;
+        this.y += this.dy;
+
+        // Bounce off left/right walls.
+        if (this.x - this.radius < 0) {
+          this.x = this.radius;
+          this.dx = Math.abs(this.dx);
+          this.game.soundManager.playTone(400, 0.05);
+        } else if (this.x + this.radius > this.game.width) {
+          this.x = this.game.width - this.radius;
+          this.dx = -Math.abs(this.dx);
+          this.game.soundManager.playTone(400, 0.05);
+        }
+        // Bounce off the top.
+        if (this.y - this.radius < 0) {
+          this.y = this.radius;
+          this.dy = Math.abs(this.dy);
+          this.game.soundManager.playTone(400, 0.05);
+        }
+        // If the ball falls below the paddle.
+        if (this.y - this.radius > this.game.height) {
+          this.game.lives--;
+          if (this.game.lives <= 0) {
+            alert("Game Over!");
+            this.game.restart();
+          } else {
+            this.reset();
+          }
+        }
+
+        // Paddle collision with Atari‑style bounce.
+        let collisionSide = Game.ballRectSideCollision(this, this.game.paddle);
+        if (collisionSide) {
+          if (collisionSide === "top") {
+            const paddle = this.game.paddle;
+            // Calculate the offset from the paddle center.
+            const relativeIntersectX = this.x - (paddle.x + paddle.width / 2);
+            const normalizedRelativeIntersectionX = relativeIntersectX / (paddle.width / 2);
+            const maxBounceAngle = Math.PI / 3; // 60 degrees.
+            const bounceAngle = normalizedRelativeIntersectionX * maxBounceAngle;
+            const speed = Math.sqrt(this.dx * this.dx + this.dy * this.dy);
+            this.dx = speed * Math.sin(bounceAngle);
+            this.dy = -speed * Math.cos(bounceAngle);
+          } else {
+            if (collisionSide === "left" || collisionSide === "right") {
+              this.dx = -this.dx;
+            } else if (collisionSide === "bottom") {
+              this.dy = -this.dy;
+            }
+          }
+          this.game.soundManager.playTone(400, 0.05);
+        }
+
+        // Brick collisions.
+        for (let brick of this.game.bricks) {
+          if (!brick.destroyed) {
+            const brickCollision = Game.ballRectSideCollision(this, brick);
+            if (brickCollision) {
+              if (brickCollision === "left" || brickCollision === "right") {
+                this.dx = -this.dx;
+              } else {
+                this.dy = -this.dy;
+              }
+              if (brick.hasCapsule) {
+                brick.hasCapsule = false;
+                this.game.capsules.push(new Capsule(this.game, brick.x + brick.width / 2, brick.y + brick.height));
+              }
+              if (!this.hitRows.has(brick.row)) {
+                this.hitRows.add(brick.row);
+                if (this.speedMultiplier < 2) {
+                  this.speedMultiplier += 0.05;
+                  const currentSpeed = Math.sqrt(this.dx * this.dx + this.dy * this.dy);
+                  const angle = Math.atan2(this.dy, this.dx);
+                  const newSpeed = currentSpeed * this.speedMultiplier;
+                  this.dx = newSpeed * Math.cos(angle);
+                  this.dy = newSpeed * Math.sin(angle);
+                }
+              }
+              this.game.destroyBrick(brick);
+              break; // Only process one collision per update.
+            }
+          }
+        }
+
+        // Alien collision.
+        if (this.game.alien) {
+          const alienCollision = Game.ballRectSideCollision(this, this.game.alien);
+          if (alienCollision) {
+            this.game.score += 100;
+            this.game.alien.destroy();
+            this.game.alien = null;
+            this.game.soundManager.playTone(800, 0.05);
+          }
+        }
+      }
+      draw(ctx) {
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+        ctx.fillStyle = "white";
+        ctx.fill();
+      }
+    }
+
+    /*****************
+     * BRICK CLASS   *
+     *****************/
+    class Brick {
+      constructor(x, y, width, height, color, points, row) {
+        this.x = x;
+        this.y = y;
+        this.width = width;
+        this.height = height;
+        this.color = color;
+        this.points = points;
+        this.row = row;
+        this.destroyed = false;
+        this.hasCapsule = false;
+      }
+      draw(ctx) {
+        if (this.destroyed) return;
+        ctx.fillStyle = this.color;
+        ctx.fillRect(this.x, this.y, this.width, this.height);
+      }
+    }
+
+    /*****************
+     * CAPSULE CLASS *
+     *****************/
+    class Capsule {
+      constructor(game, x, y) {
+        this.game = game;
+        this.x = x;
+        this.y = y;
+        this.radius = 6;
+        this.speed = 2;
+        this.toRemove = false;
+      }
+      update(deltaTime) {
+        this.y += this.speed;
+        if (this.y - this.radius > this.game.height) {
+          this.toRemove = true;
+        }
+        // Activate fire mode if the paddle collects the capsule.
+        if (Game.ballRectSideCollision({ x: this.x, y: this.y, radius: this.radius }, this.game.paddle)) {
+          this.game.paddle.fireMode = true;
+          this.game.soundManager.playTone(500, 0.05);
+          this.toRemove = true;
+        }
+      }
+      draw(ctx) {
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+        ctx.fillStyle = "red";
+        ctx.fill();
+      }
+    }
+
+    /*****************
+     * PROJECTILE    *
+     *****************/
+    class Projectile {
+      constructor(game, x, y) {
+        this.game = game;
+        this.x = x;
+        this.y = y;
+        this.width = 6;
+        this.height = 12;
+        this.speed = 5;
+        this.toRemove = false;
+      }
+      update(deltaTime) {
+        this.y -= this.speed;
+        if (this.y + this.height < 0) {
+          this.toRemove = true;
+        }
+        for (let brick of this.game.bricks) {
+          if (!brick.destroyed && Game.rectRectCollision(this, brick)) {
+            this.toRemove = true;
+            this.game.destroyBrick(brick);
+          }
+        }
+        if (this.game.alien && Game.rectRectCollision(this, this.game.alien)) {
+          this.game.score += 100;
+          this.game.alien.destroy();
+          this.game.alien = null;
+          this.toRemove = true;
+          this.game.soundManager.playTone(800, 0.05);
+        }
+      }
+      draw(ctx) {
+        ctx.fillStyle = "yellow";
+        ctx.fillRect(this.x, this.y, this.width, this.height);
+      }
+    }
+
+    /*****************
+     * ALIEN CLASS   *
+     *****************/
+    class Alien {
+      constructor(game) {
+        this.game = game;
+        this.width = 60;
+        this.height = 30;
+        this.x = -this.width; // Start offscreen left.
+        this.y = 20;         // Appear in the second blank row.
+        this.speed = 2;
+        // Instead of a continuous low hum, play a higher, shorter three‐beep sequence,
+        // repeated twice during the alien’s traverse.
+        this.beepSequencesPlayed = 0;
+        this.maxBeepSequences = 2;
+        this.toRemove = false;
+        this.blinkTimer = 0;
+        this.blinkState = false;
+        this.dropDone = false;
+        this.scheduleNextBeepSequence();
+      }
+      update(deltaTime) {
+        this.x += this.speed;
+        if (!this.dropDone && this.x + this.width / 2 >= this.game.width / 2) {
+          this.dropReplacementBrick();
+          this.dropDone = true;
+          this.game.soundManager.playTone(400, 0.1);
+        }
+        if (this.x > this.game.width) {
+          this.toRemove = true;
+        }
+        this.blinkTimer += deltaTime;
+        if (this.blinkTimer >= 500) {
+          this.blinkState = !this.blinkState;
+          this.blinkTimer = 0;
+        }
+      }
+      draw(ctx) {
+        // Draw the silver elliptical base.
+        ctx.fillStyle = "silver";
+        ctx.beginPath();
+        ctx.ellipse(this.x + this.width / 2, this.y + this.height / 2, this.width / 2, this.height / 4, 0, 0, Math.PI * 2);
+        ctx.fill();
+        // Draw the lightgray dome.
+        ctx.fillStyle = "lightgray";
+        ctx.beginPath();
+        ctx.arc(this.x + this.width / 2, this.y, this.width / 4, Math.PI, 2 * Math.PI);
+        ctx.fill();
+        // Draw two blinking red lights on the underside.
+        ctx.fillStyle = this.blinkState ? "red" : "darkred";
+        ctx.beginPath();
+        ctx.arc(this.x + this.width / 3, this.y + this.height - 5, 5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(this.x + (2 * this.width) / 3, this.y + this.height - 5, 5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      dropReplacementBrick() {
+        if (this.game.destroyedBricks.length > 0) {
+          const idx = Math.floor(Math.random() * this.game.destroyedBricks.length);
+          const brick = this.game.destroyedBricks[idx];
+          const replacement = new ReplacementBrick(this.game, this.x + this.width / 2 - brick.width / 2, this.y + this.height, brick);
+          this.game.replacementBricks.push(replacement);
+        }
+      }
+      destroy() {
+        this.toRemove = true;
+      }
+      scheduleNextBeepSequence() {
+        if (this.beepSequencesPlayed < this.maxBeepSequences && !this.toRemove) {
+          setTimeout(() => {
+            if (!this.toRemove) {
+              this.playBeepSequence();
+            }
+          }, 200);
+        }
+      }
+      playBeepSequence() {
+        // Play three high, short beeps.
+        this.game.soundManager.playTone(800, 0.05);
+        setTimeout(() => { this.game.soundManager.playTone(850, 0.05); }, 150);
+        setTimeout(() => { this.game.soundManager.playTone(900, 0.05); }, 300);
+        this.beepSequencesPlayed++;
+        if (this.beepSequencesPlayed < this.maxBeepSequences && !this.toRemove) {
+          setTimeout(() => { this.scheduleNextBeepSequence(); }, 800);
+        }
+      }
+    }
+
+    /******************************
+     * REPLACEMENT BRICK CLASS    *
+     ******************************/
+    class ReplacementBrick {
+      constructor(game, x, y, targetBrick) {
+        this.game = game;
+        this.x = x;
+        this.y = y;
+        this.width = targetBrick.width;
+        this.height = targetBrick.height;
+        this.targetX = targetBrick.x;
+        this.targetY = targetBrick.y;
+        this.targetBrick = targetBrick;
+        this.speed = 2;
+        this.toRemove = false;
+      }
+      update(deltaTime) {
+        if (this.y < this.targetY) {
+          this.y += this.speed;
+        } else {
+          this.game.restoreBrick(this.targetBrick);
+          this.toRemove = true;
+        }
+      }
+      draw(ctx) {
+        ctx.fillStyle = "gray";
+        ctx.fillRect(this.x, this.y, this.width, this.height);
+      }
+    }
+
+    /***********************
+     * EVENT LISTENERS     *
+     ***********************/
+    const canvas = document.getElementById("gameCanvas");
+    const game = new Game(canvas);
+
+    // Global listener to resume the AudioContext on first user interaction.
+    function resumeAudio() {
+      if (game.soundManager.audioCtx.state === "suspended") {
+        game.soundManager.audioCtx.resume();
+      }
+      document.body.removeEventListener("touchstart", resumeAudio);
+      document.body.removeEventListener("click", resumeAudio);
+    }
+    document.body.addEventListener("touchstart", resumeAudio, { once: true });
+    document.body.addEventListener("click", resumeAudio, { once: true });
+
+    // Mouse movement: update the paddle's horizontal position.
+    canvas.addEventListener("mousemove", (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      // Scale the mouse coordinate to the internal 800px width.
+      const scaleX = game.width / rect.width;
+      game.paddle.x = mouseX * scaleX - game.paddle.width / 2;
+      if (game.paddle.x < 0) game.paddle.x = 0;
+      if (game.paddle.x + game.paddle.width > game.width)
+        game.paddle.x = game.width - game.paddle.width;
+    });
+
+    // Touch events for mobile: use touchstart to record drag offset, touchmove to update position.
+    canvas.addEventListener("touchstart", (e) => {
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      const touch = e.touches[0];
+      const scaleX = game.width / rect.width;
+      const touchX = (touch.clientX - rect.left) * scaleX;
+      // If touch is within the paddle, record the offset.
+      if (touchX >= game.paddle.x && touchX <= game.paddle.x + game.paddle.width) {
+        game.paddle.dragOffset = touchX - game.paddle.x;
+      } else {
+        // Otherwise, default to centering the paddle under the touch.
+        game.paddle.dragOffset = game.paddle.width / 2;
+      }
+    }, { passive: false });
+
+    canvas.addEventListener("touchmove", (e) => {
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      const touch = e.touches[0];
+      const scaleX = game.width / rect.width;
+      const touchX = (touch.clientX - rect.left) * scaleX;
+      game.paddle.x = touchX - game.paddle.dragOffset;
+      if (game.paddle.x < 0) game.paddle.x = 0;
+      if (game.paddle.x + game.paddle.width > game.width)
+        game.paddle.x = game.width - game.paddle.width;
+    }, { passive: false });
+
+    canvas.addEventListener("touchend", () => {
+      // When the touch ends, keep the paddle at its last position.
+      game.paddle.dragOffset = 0;
+    });
+
+    // Keydown: allow firing when in fire mode (Space or Control).
+    document.addEventListener("keydown", (e) => {
+      if ((e.key === " " || e.key === "Control") && game.paddle.fireMode) {
+        game.paddle.fireProjectile();
+      }
+    });
+
+    // Touch end: tap to fire if in fire mode.
+    canvas.addEventListener("touchend", (e) => {
+      if (game.paddle.fireMode) {
+        game.paddle.fireProjectile();
+      }
+    });
+
+    // HTML buttons for restart and pause.
+    document.getElementById("restartButton").addEventListener("click", () => {
+      game.restart();
+    });
+    document.getElementById("pauseButton").addEventListener("click", () => {
+      game.isPaused = !game.isPaused;
+      document.getElementById("pauseButton").textContent = game.isPaused ? "Resume" : "Pause";
+    });
+
+    /***********************
+     * GAME LOOP           *
+     ***********************/
+    function gameLoop(timestamp) {
+      if (!game.lastTime) game.lastTime = timestamp;
+      const deltaTime = timestamp - game.lastTime;
+      game.lastTime = timestamp;
+      game.update(deltaTime);
+      game.render();
+      if (game.alien && game.alien.toRemove) {
+        game.alien = null;
+      }
+      requestAnimationFrame(gameLoop);
+    }
+    requestAnimationFrame(gameLoop);
+  </script>
+</body>
+</html>
